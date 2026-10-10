@@ -1,8 +1,12 @@
 # Spectral Compressed Sensing: Numerical Reproduction and SHGD Extension
 
-This repository contains the numerical code for an MSc Mathematics thesis on
-spectral compressed sensing via structured low-rank Hankel recovery. The project
-has two main components:
+This repository contains the numerical code, experiment records, and
+figure-generation workflow for an MSc Mathematics thesis on spectral compressed
+sensing via projected gradient descent.
+
+**Permanent archived release:** https://doi.org/10.25625/NFBEGZ
+
+The project has two main components:
 
 1. **Experiment A:** a Figure 1-style reproduction of the phase-transition study
    in Cai, Wang, and Wei (2018), comparing PGD, FIHT, ANM, and a Hankel
@@ -23,6 +27,27 @@ Figures 5.1--5.5 of the thesis from the completed trial-level records.
 > Signal Processing, 72, 1590--1606.
 
 ---
+
+## Archived thesis release
+
+The source code, numerical experiment records, environment specifications, and
+figure-generation scripts corresponding to the thesis-submission release are
+permanently archived in Göttingen Research Online (GRO.data):
+
+**DOI:** https://doi.org/10.25625/NFBEGZ
+
+The archived dataset corresponds to:
+
+- **Release:** `v1.0-thesis`
+- **Git commit:** `4089eb6b40b8c3cad68115926f0c33478c98317d`
+- **GRO.data version:** `1.0`
+
+This GitLab repository remains the development repository. The GRO.data DOI
+identifies the fixed archival version associated with the thesis-submission
+release. The tag `v1.0-thesis` is the immutable reference point for that
+archived version; later documentation-only commits on `main` do not alter the
+published archive.
+
 
 ## Current status
 
@@ -66,17 +91,283 @@ The framework now provides:
 - a conservative SVD fallback for FIHT and shared truncated-SVD operations;
 - one script for generating all Chapter 5 figures.
 
-Generated numerical results are intentionally excluded from version control by
-`.gitignore`.
+The completed thesis result files under `results/` are retained in version
+control to provide an audit trail. Temporary smoke-test, scratch, and other
+newly generated outputs should be written to separate directories and are
+excluded where appropriate by `.gitignore`.
 
 ---
+
+## Optimisation problem
+
+The experiments study recovery of a spectrally sparse signal
+
+```math
+x_t = \sum_{k=1}^{r} d_k e^{(2\pi i f_k-\tau_k)t},
+\qquad t=0,\ldots,n-1,
+```
+
+from only a subset of its time-domain samples.
+
+The key structural observation is that the Hankel lifting
+
+```math
+\mathcal{H}x =
+\begin{bmatrix}
+x_0 & x_1 & \cdots \\
+x_1 & x_2 & \cdots \\
+\vdots & \vdots & \ddots
+\end{bmatrix}
+```
+
+has rank $r$ when the signal contains $r$ distinct spectral components.
+
+Because different Hankel anti-diagonals have different multiplicities, the
+implementation uses the normalised lifting
+
+```math
+\mathcal{G} = \mathcal{H}D^{-1},
+\qquad
+\mathcal{G}^*\mathcal{G} = I,
+```
+
+where $D$ is the diagonal anti-diagonal weighting operator. Writing
+
+```math
+y = Dx
+```
+
+gives
+
+```math
+\mathcal{G}y = \mathcal{H}x.
+```
+
+### PGD formulation
+
+Projected Gradient Descent represents the rank-$r$ Hankel matrix by two
+low-rank factors,
+
+```math
+L(Z)=Z_UZ_V^*,
+\qquad
+Z_U\in\mathbb{C}^{n_1\times r},
+\qquad
+Z_V\in\mathbb{C}^{n_2\times r}.
+```
+
+The recovery problem is
+
+```math
+\min_{Z\in\mathcal{C}}
+\left\{
+\left\|(I-\mathcal{G}\mathcal{G}^*)L(Z)\right\|_F^2
++
+\frac{1}{p}
+\left\|
+R_\Omega\!\left(\mathcal{G}^*L(Z)-y\right)
+\right\|_2^2
++
+\frac{\lambda}{2}
+\left\|
+Z_U^*Z_U-Z_V^*Z_V
+\right\|_F^2
+\right\},
+```
+
+with
+
+```math
+\lambda=\frac{1}{4},
+\qquad
+p=\frac{m}{n}.
+```
+
+The three terms have the following roles.
+
+**Hankel-consistency term**
+
+```math
+\left\|(I-\mathcal{G}\mathcal{G}^*)L(Z)\right\|_F^2
+```
+
+penalises departure of the factorised matrix from the Hankel subspace.
+
+**Data-fidelity term**
+
+```math
+\frac{1}{p}
+\left\|
+R_\Omega\!\left(\mathcal{G}^*L(Z)-y\right)
+\right\|_2^2
+```
+
+penalises disagreement with the observed samples.
+
+**Balancing term**
+
+```math
+\frac{\lambda}{2}
+\left\|
+Z_U^*Z_U-Z_V^*Z_V
+\right\|_F^2
+```
+
+prevents one factor from growing while the other shrinks.
+
+Low rank is imposed directly by the factorisation $Z_UZ_V^*$. The feasible
+set
+
+```math
+\mathcal{C}
+=
+\left\{
+Z:
+\|Z\|_{2,\infty}
+\le
+\sqrt{\frac{\mu c_s r\sigma}{n}}
+\right\}
+```
+
+enforces the factor incoherence condition through row-wise projection after
+each gradient step.
+
+The PGD iteration therefore has the form
+
+```math
+Z^{k+1}
+=
+P_{\mathcal{C}}
+\left(
+Z^k-\eta_k\nabla F(Z^k)
+\right),
+```
+
+where the implementation uses a deterministic projected backtracking line
+search.
+
+The recovered time-domain signal is obtained from the final factor product by
+
+```math
+\widehat{x}
+=
+D^{-2}\mathcal{H}^*
+\left(
+Z_UZ_V^*
+\right).
+```
+
+The implementation and derivation follow Cai, Wang, and Wei (2018), with the
+normalised Hankel operator, spectral initialisation, Wirtinger gradient, and
+incoherence projection implemented explicitly in `pgd_algorithm.py` and
+`utils.py`.
+
+
+### Symmetric Hankel extension
+
+For the experiments in this repository, $n=127$, so the Hankel lifting is
+$64\times64$ and complex symmetric. SHGD exploits this structure by replacing
+the asymmetric factorisation
+
+```math
+Z_UZ_V^*
+```
+
+with the single-factor representation
+
+```math
+ZZ^T.
+```
+
+This removes the PGD balancing regulariser and provides the basis for
+Experiment B, which compares PGD, SHGD, and FIHT on identical problem
+instances.
+
+
 
 ## Installation
 
 Python **3.10 or newer** is recommended.
 
-Create and activate a virtual environment, then install the numerical
+The repository provides three environment descriptions for different
+reproducibility purposes:
+
+- `requirements.txt` contains the minimal pinned dependencies of the original
+  environment used for the thesis results;
+- `requirements-full.txt` is the complete `pip freeze` snapshot of that
+  original results environment, including development-related packages;
+- `environment.yml` provides the Mamba/Conda environment used for independent
+  validation on the Institute for Numerical and Applied Mathematics
+  `maryam` server.
+
+For the fixed thesis-submission archive and exact release provenance, see
+[Archived thesis release](#archived-thesis-release).
+
+### Original thesis-results environment
+
+The numerical results reported in the thesis were generated with:
+
+```text
+Python: 3.14.5
+NumPy: 2.5.1
+SciPy: 1.18.0
+Matplotlib: 3.11.1
+```
+
+For a minimal recreation of the numerical dependencies, use:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+For the complete frozen package environment used on the original development
+machine, use:
+
+```bash
+python -m pip install -r requirements-full.txt
+```
+
+The full requirements file intentionally contains additional packages used by
+the development environment (for example IPython/Jupyter and debugging
+utilities) that are not required by the experiment scripts themselves.
+
+### Recommended for independent validation: Mamba environment
+
+The repository includes `environment.yml`, which defines the numerical
+environment used for the final server-side validation.
+
+Create and activate the environment with:
+
+```bash
+mamba env create -f environment.yml
+mamba activate spectral_cs
+```
+
+The committed environment specifies:
+
+```yaml
+name: spectral_cs
+
+channels:
+  - conda-forge
+
 dependencies:
+  - python=3.11
+  - numpy=2.4.6
+  - scipy=1.17.1
+  - matplotlib=3.11.1
+```
+
+The same file can also be used with Conda if Mamba is unavailable:
+
+```bash
+conda env create -f environment.yml
+conda activate spectral_cs
+```
+
+### Alternative: Python virtual environment
+
+A standard Python virtual environment can also be used.
 
 ```bash
 python -m venv .venv
@@ -139,6 +430,55 @@ These smoke-test files are not suitable for generating the complete thesis
 figures.
 
 ---
+### Mamba / Maryam server validation
+
+The repository was additionally validated on the Institute
+for Numerical and Applied Mathematics **Maryam** computing server using a
+dedicated Mamba environment.
+
+The validation environment was:
+
+```text
+Host: maryam
+Python: 3.11.16
+Mamba: 2.1.1
+NumPy: 2.4.6
+SciPy: 1.17.1
+Matplotlib: 3.11.1
+CPU threads visible: 72
+```
+
+The following checks completed successfully:
+
+- all project modules imported without error;
+- Experiment A PGD smoke test;
+- Experiment B SHGD smoke test;
+- one-cell smoke test of **PGD, FIHT, SHGD, ADMM, and ANM**;
+- separated- and unseparated-frequency signal regimes;
+- JSON and JSONL result writing to scratch storage;
+- complete Chapter 5 figure generation (Figures 5.1--5.5);
+- Mamba dependency resolution from `environment.yml` using a dry run.
+
+The all-algorithm smoke test was deliberately small (`r=1`, `p=0.70`,
+one trial) and is intended only to verify that each implementation executes
+correctly in the server environment. These validation outputs are **not**
+thesis results and should not be interpreted as replacements for the completed
+experimental grids.
+
+For server-side runs, large or temporary outputs should be directed to
+appropriate scratch storage rather than the source-code directory. For example:
+
+```bash
+python experiment_a_reproduction.py \
+    --regime unseparated \
+    --out-dir /scratch/<user>/spectral_cs_results
+```
+
+Important validation records should be copied from scratch storage to a
+persistent or backed-up location after the run.
+
+---
+
 
 ## Running Experiment A
 
@@ -344,19 +684,42 @@ default Experiment B grid includes all required ranks.
 | `experiment_a_reproduction.py` | Experiment A: reproduction and extended comparison of PGD, FIHT, ANM, and EMaC/ADMM |
 | `experiment_b_shgd_extension.py` | Experiment B: comparison of PGD, SHGD, and FIHT |
 | `figures.py` | Generates the Chapter 5 figures from completed experiment records |
+| `requirements.txt` | Minimal pinned Python dependencies matching the original thesis-results environment |
+| `requirements-full.txt` | Complete `pip freeze` snapshot of the original development/results environment |
+| `environment.yml` | Reproducible Mamba/Conda environment used for final independent server-side validation |
 | `results/` | Version-controlled JSON and JSONL outputs from the completed numerical experiments |
 
-The repository contains only the source code and numerical records required for the thesis experiments. The earlier demonstration notebook has been removed because it is not part of the experiment pipeline and was not used to generate the reported results.
+The repository contains the source code, environment specifications, and
+numerical records required for the thesis experiments. The earlier
+demonstration notebook has been removed because it is not part of the
+experiment pipeline and was not used to generate the reported results.
+
 ---
 
 ## Results and Reproducibility
 
 The completed numerical results are stored in the version-controlled `results/`
-directory. Including these files in the repository provides an audit trail between the
-experiment code, the numerical findings, and the figures and tables reported in the
-thesis.
+directory. Including these files in the repository provides an audit trail
+between the experiment code, the numerical findings, and the figures and tables
+reported in the thesis.
 
-Depending on which experiment regimes have been completed, the directory may contain:
+The fixed archival version of the thesis software and records is available at
+https://doi.org/10.25625/NFBEGZ and corresponds to Git tag `v1.0-thesis`,
+commit `4089eb6b40b8c3cad68115926f0c33478c98317d`.
+
+The reported thesis results were generated in the original Python environment
+documented by `requirements.txt` and `requirements-full.txt` (Python 3.14.5,
+NumPy 2.5.1, SciPy 1.18.0, Matplotlib 3.11.1).
+
+The codebase was subsequently and independently smoke-tested on the Maryam
+server using the separate Mamba environment defined in `environment.yml`
+(Python 3.11.16, NumPy 2.4.6, SciPy 1.17.1, Matplotlib 3.11.1). This provides an
+additional check that the repository executes outside the original development
+machine and is not intended to imply that the Maryam environment generated the
+reported thesis results.
+
+Depending on which experiment regimes have been completed, the directory may
+contain:
 
 ```text
 results/
@@ -368,6 +731,7 @@ results/
 ├── experiment_b_unseparated_trials.jsonl
 ├── experiment_b_separated.json
 └── experiment_b_separated_trials.jsonl
+```
 
 ---
 
@@ -540,24 +904,19 @@ G* G = I.
 
 ---
 
-## Result-management policy
-
-The `results/` directory is excluded from Git because full trial logs and
-checkpoints can be large and are generated data rather than source code. For a
-reproducible thesis archive, store completed results separately, for example as:
-
-- a tagged GitLab release asset;
-- an institutional research-data deposit;
-- a DOI-backed archive;
-- a compressed snapshot accompanied by the exact commit hash.
-
-The generated `images/` directory is not ignored by the current `.gitignore`, so
-final thesis figures may be committed deliberately after review.
-
----
-
 ## Citation
 
-When using this repository, cite the thesis and the principal source papers
-listed above. A formal `CITATION.cff` file can be added once the final thesis
-bibliographic details and repository release tag are fixed.
+If you use the source code, numerical results, or figure-generation scripts from
+this repository, please cite the archived thesis software dataset:
+
+> Duah, Michael Hubert (2026). *Spectral Compressed Sensing via Projected
+> Gradient Descent: Numerical Simulation and Analysis — Source Code and
+> Experiment Records*. GRO.data, Version 1.0.
+> https://doi.org/10.25625/NFBEGZ
+
+The archived release corresponds to Git tag `v1.0-thesis` and commit
+`4089eb6b40b8c3cad68115926f0c33478c98317d`.
+
+The mathematical methods implemented in this repository should additionally be
+cited through their respective original publications listed in the
+**Main references** section above.
