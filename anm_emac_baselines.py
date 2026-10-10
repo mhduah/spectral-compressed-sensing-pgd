@@ -112,7 +112,9 @@ def _project_psd(M):
     return (V * w_clipped) @ V.conj().T
 
 
-def anm_recovery(y_obs, Omega, r, n, max_iter=2000, tol=1e-6, rho=1.0,
+def anm_recovery(y_obs, Omega, r, n, max_iter=2000, rho=1.0,
+                 relative_iterate_tol=1e-6, primal_residual_tol=1e-6,
+                 min_iter=50, patience=10,
                  x_true=None, verbose=False, return_history=False):
     """
     Atomic Norm Minimisation via ADMM on the PSD Toeplitz moment problem.
@@ -162,14 +164,31 @@ def anm_recovery(y_obs, Omega, r, n, max_iter=2000, tol=1e-6, rho=1.0,
                               three solvers used in the phase-transition
                               comparison.
     n       : int            signal length
-    max_iter, tol, rho       ADMM parameters
-    x_true  : ndarray, optional   ground truth for monitoring
+    max_iter, rho            ADMM parameters
+    relative_iterate_tol     stop when ||x^{k+1}-x^k|| / ||x^k|| <= this
+    primal_residual_tol      stop when ||W^{k+1}-S^{k+1}||_F / ||S^{k+1}||_F <= this
+    min_iter, patience       both stopping criteria must hold for
+                             `patience` CONSECUTIVE iterations, and not
+                             before iteration `min_iter`, before the run
+                             is accepted as converged. This guards
+                             against a genuine but transient early
+                             plateau observed empirically in this solver:
+                             the iterate can go nearly static for
+                             ~10-15 iterations (rel_step ~1e-17) at a
+                             point that is NOT the true solution, before
+                             escaping and converging properly tens to
+                             hundreds of iterations later. A naive
+                             single-iteration check mistakes that
+                             transient plateau for convergence.
+    x_true  : ndarray, optional   ground truth for diagnostics ONLY -- it
+                                   is never used to decide when to stop or
+                                   which iterate to return
     verbose, return_history       output controls
 
     Returns
     -------
-    result : dict with keys 'x', 'converged', 'iterations', 'time',
-             and 'rel_error' if x_true is given.
+    result : dict with keys 'x', 'converged', 'status', 'iterations',
+             'time', and 'rel_error' if x_true is given.
     """
     t0 = time.time()
     N = n + 1   # size of the lifted block matrix
@@ -205,9 +224,25 @@ def anm_recovery(y_obs, Omega, r, n, max_iter=2000, tol=1e-6, rho=1.0,
 
         t_ = M[n, n].real
 
-        # Gradient step on the linear cost (1/2)(t + u_0): subtract a
-        # small constant from each (this is the correct proximal/gradient
-        # update for a linear term under ADMM with step 1/rho).
+        # NOTE on u_0 scaling: u_0 parametrises all n diagonal entries of
+        # the (1,1) Toeplitz block (replicated n times), while t is a
+        # single scalar entry (W[n,n]). Treating each as an isolated
+        # closed-form minimisation of the augmented-Lagrangian penalty
+        # plus the linear cost predicts a shift of grad_step for t but
+        # grad_step/n for u_0 (verified symbolically). Empirically,
+        # however, applying that /n-scaled shift here makes recovery on
+        # the correctness-test problem markedly WORSE (converges to a
+        # feasible but wrong fixed point, rel_error ~0.26 instead of
+        # ~1e-6), while the unscaled shift below converges correctly.
+        # This indicates the isolated closed-form derivation does not
+        # carry over cleanly to this particular (non-rigorously-derived,
+        # already-flagged-as-approximate) ADMM splitting -- most likely
+        # because some other part of the splitting is itself an
+        # approximation that this shift was inadvertently compensating
+        # for. Given the empirical evidence, the unscaled shift is kept;
+        # a from-scratch, verified re-derivation of the full splitting
+        # would be needed to safely apply the theoretically-indicated
+        # correction, and is out of scope for this pass.
         u_[0] = max(u_[0].real - grad_step, 0.0)
         t_ = max(t_ - grad_step, 0.0)
 
@@ -224,10 +259,16 @@ def anm_recovery(y_obs, Omega, r, n, max_iter=2000, tol=1e-6, rho=1.0,
 
     grad_step = 0.5 / rho
 
-    history = {'rel_errors': []}
-    best_err = np.inf
-    best_x = x0.copy()
+    history = {
+        'relative_iterate': [],
+        'primal_residual': [],
+        'relative_error': [relative_error(x0, x_true)] if x_true is not None else [],
+    }
     converged = False
+    status = "max_iter"
+    x = x0
+    iteration = 0
+    consecutive_ok = 0
 
     for k in range(max_iter):
 
@@ -235,38 +276,58 @@ def anm_recovery(y_obs, Omega, r, n, max_iter=2000, tol=1e-6, rho=1.0,
         W = _project_psd(S - Lambda / rho)
 
         # ---- S-update: structured projection with linear-cost gradient step ----
-        S = project_structure(W + Lambda / rho, grad_step)
+        S_new = project_structure(W + Lambda / rho, grad_step)
 
         # ---- Dual update ----
-        Lambda = Lambda + rho * (W - S)
+        Lambda = Lambda + rho * (W - S_new)
 
-        x = S[:n, n]
+        x_new = S_new[:n, n]
 
-        if not np.all(np.isfinite(x)):
-            if verbose:
-                print(f"  ANM: overflow at iteration {k}")
+        if not np.all(np.isfinite(x_new)):
+            status = "nonfinite_iterate"
             break
 
-        if x_true is not None:
-            err = relative_error(x, x_true)
-            if err < best_err:
-                best_err = err
-                best_x = x.copy()
-            if return_history:
-                history['rel_errors'].append(err)
-            if verbose and k % 100 == 0:
-                print(f"  ANM k={k:4d}: err={err:.2e}")
-            if err < tol:
-                converged = True
-                break
+        rel_iterate = float(
+            np.linalg.norm(x_new - x)
+            / max(np.linalg.norm(x), np.finfo(float).eps)
+        )
+        primal_res = float(
+            np.linalg.norm(W - S_new, 'fro')
+            / max(np.linalg.norm(S_new, 'fro'), np.finfo(float).eps)
+        )
 
-    if x_true is not None:
-        x = best_x
+        S = S_new
+        x = x_new
+        iteration = k + 1
+
+        if return_history:
+            history['relative_iterate'].append(rel_iterate)
+            history['primal_residual'].append(primal_res)
+            if x_true is not None:
+                history['relative_error'].append(relative_error(x, x_true))
+
+        if verbose and (k % 100 == 0 or k < 5):
+            msg = (f"  ANM k={k:4d}: rel_step={rel_iterate:.2e} "
+                   f"primal_res={primal_res:.2e}")
+            if x_true is not None:
+                msg += f" rel_err={relative_error(x, x_true):.2e}"
+            print(msg)
+
+        if rel_iterate <= relative_iterate_tol and primal_res <= primal_residual_tol:
+            consecutive_ok += 1
+        else:
+            consecutive_ok = 0
+
+        if iteration >= min_iter and consecutive_ok >= patience:
+            converged = True
+            status = "relative_iterate_and_primal_residual"
+            break
 
     result = {
         'x': x,
         'converged': converged,
-        'iterations': k + 1,
+        'status': status,
+        'iterations': iteration,
         'time': time.time() - t0,
         'rho': rho,
     }

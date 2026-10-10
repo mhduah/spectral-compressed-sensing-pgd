@@ -1,299 +1,563 @@
-# Spectral Compressed Sensing: Numerical Reproduction
+# Spectral Compressed Sensing: Numerical Reproduction and SHGD Extension
 
-Numerical experiments for an MSc Mathematics thesis reproducing and extending the
-Projected Gradient Descent (PGD) algorithm for spectral compressed sensing.
+This repository contains the numerical code for an MSc Mathematics thesis on
+spectral compressed sensing via structured low-rank Hankel recovery. The project
+has two main components:
 
-**Reference Paper:**
-> Cai, J.-F., Wang, T., & Wei, K. (2018). Spectral Compressed Sensing via Projected
-> Gradient Descent. *SIAM Journal on Optimization*, 28(3), 2625-2653.
+1. **Experiment A:** a Figure 1-style reproduction of the phase-transition study
+   in Cai, Wang, and Wei (2018), comparing PGD, FIHT, ANM, and a Hankel
+   nuclear-norm ADMM solver;
+2. **Experiment B:** an extension comparing PGD with Symmetric Hankel Gradient
+   Descent (SHGD) and FIHT on the same paired problem instances.
 
-**Thesis aim:** reproduce, as faithfully as computational resources permit, the phase
-transition experiment of Section 3.1 of the paper above, and use this reproduction as the
-basis for an extended empirical comparison of PGD against three further recovery methods.
+The repository also contains a single figure-generation script that rebuilds
+Figures 5.1--5.5 of the thesis from the completed trial-level records.
 
----
+## Main references
 
-## Status
+> Cai, J.-F., Wang, T., and Wei, K. (2018). *Spectral Compressed Sensing via
+> Projected Gradient Descent*. SIAM Journal on Optimization, 28(3), 2625--2653.
 
-All implemented recovery methods (PGD, ADMM/EMaC, FIHT, and ANM) are
-**corrected and verified**. An earlier version of this codebase contained five
-implementation errors that caused PGD, ADMM, and FIHT to fail on every test signal; these
-are documented in the thesis (Chapter on Numerical Implementation) and summarised in
-[Known Issues, Fixed](#known-issues-fixed) below. All experiments in this repository, and
-all numbers reported in the thesis, are from the corrected implementation.
-
-**Every experiment in this thesis is run at signal length `n=127`**, matching the exact
-configuration used throughout Section 3 of Cai, Wang, and Wei (2018), so that the Hankel
-matrix is exactly square (`n1=n2=64`). The sole exception is the computational scaling
-experiment, which necessarily sweeps a range of signal dimensions to estimate asymptotic
-complexity; `n=128` appears there only as one of four points on that sweep, not as a
-competing convention.
+> Li, J., Cui, W., and Zhang, X. (2024). *Projected Gradient Descent for Spectral
+> Compressed Sensing via Symmetric Hankel Factorization*. IEEE Transactions on
+> Signal Processing, 72, 1590--1606.
 
 ---
 
-## Quick Start
+## Current status
 
-1. Create a virtual environment and install the dependencies:
-   ```bash
-   python -m venv .venv
-   # Windows PowerShell: .venv\Scripts\Activate.ps1
-   # macOS/Linux: source .venv/bin/activate
-   python -m pip install -r requirements.txt
-   ```
-   No external SDP solver is required; ANM and EMaC are implemented using NumPy/SciPy.
+The current experiment framework includes five recovery methods:
 
-2. **Reproduce the primary phase transition experiment** (matches Cai-Wang-Wei Section 3.1
-   exactly: `n=127`, 18-point sampling ratio grid, 50 trials, four algorithms, both
-   frequency regimes):
-   ```bash
-   python run_reproduction_experiment.py --quick   # fast sanity check, ~1-2 min
-   python run_reproduction_experiment.py           # full protocol, several hours
-   ```
-   Results are saved to `results/phase_transition_reproduction_unseparated.json` and
-   `results/phase_transition_reproduction_separated.json`.
+- Projected Gradient Descent (**PGD**);
+- Fast Iterative Hard Thresholding (**FIHT**);
+- Atomic Norm Minimisation (**ANM**);
+- Hankel nuclear-norm minimisation solved by **ADMM**;
+- Symmetric Hankel Gradient Descent (**SHGD**).
 
-3. **Run the extended study** (algorithm comparison, convergence, noise robustness,
-   computational scaling — all at `n=127`):
-   ```bash
-   python run_all_experiments.py --quick   # fast sanity check, ~2 min
-   python run_all_experiments.py           # full protocol, ~30-60 min
-   ```
-   Results and plots are saved to the `results/` directory.
+The ADMM solver and EMaC correspond to the same Hankel nuclear-norm convex
+program in this implementation. They are therefore **not reported as two
+independent algorithms**. Experiment A labels the method `ADMM` to make clear
+that the repository uses its own ADMM implementation rather than the CVX-based
+solver used in the original paper.
 
-4. Generate the phase-transition heatmap figures used in the thesis:
-   ```bash
-   python make_phase_transition_figures.py \
-       --unsep results/phase_transition_reproduction_unseparated.json \
-       --sep   results/phase_transition_reproduction_separated.json \
-       --outdir images
-   ```
+All principal experiments use signal length
 
----
+```text
+n = 127,
+```
 
-## File Structure
+which produces a square Hankel matrix of size `64 x 64`. The shared empirical
+success criterion is
 
-| File | Description |
-|------|-------------|
-| `utils.py` | Core utilities: signal generation, Hankel operators, sampling, incoherence projection |
-| `pgd_algorithm.py` | Projected Gradient Descent (non-convex factorised method) — corrected |
-| `admm_baseline.py` | ADMM solver for Hankel nuclear norm minimisation (convex baseline) — corrected; this is also the EMaC solver |
-| `fiht_baseline.py` | Fast Iterative Hard Thresholding — corrected |
-| `anm_emac_baselines.py` | Atomic Norm Minimisation (`anm_recovery`) and a re-export of EMaC (`emac_recovery`), used for the primary reproduction |
-| `run_reproduction_experiment.py` | Reproduces the primary phase transition experiment under the paper's exact protocol |
-| `experiments.py` | Extended-study experiment implementations and plotting functions (all default to `n=127`) |
-| `run_all_experiments.py` | Main script to run the full extended-study suite |
-| `make_phase_transition_figures.py` | Generates the heatmap figures for the primary reproduction from its JSON output |
-| `Spectral_CS_Demo.ipynb` | Interactive Jupyter notebook |
+```text
+relative reconstruction error <= 1e-3.
+```
+
+The framework now provides:
+
+- deterministic, paired trial generation across algorithms;
+- explicit recording of all solver and protocol parameters;
+- cell-level checkpointing and exact resumption;
+- atomic per-cell trial logs;
+- merged trial-level JSONL output after a regime completes;
+- separate statistics for successful trials and all attempted trials;
+- robust exception handling so that one failed solver call does not terminate
+  the entire experiment;
+- a conservative SVD fallback for FIHT and shared truncated-SVD operations;
+- one script for generating all Chapter 5 figures.
+
+Generated numerical results are intentionally excluded from version control by
+`.gitignore`.
 
 ---
 
-## Implemented Algorithms
+## Installation
 
-### 1. Projected Gradient Descent (PGD) — `pgd_algorithm.py`
-The primary subject of this thesis. Factorises the Hankel matrix as `H(x) = Z_U Z_V*` and
-performs projected gradient descent on the factor matrices via a Wirtinger-calculus
-gradient (derived in full in the thesis). Uses a fixed step size calibrated at
-initialisation from an inflated singular-value estimate, following the paper's Algorithm 1.
+Python **3.10 or newer** is recommended.
 
-### 2. ADMM Nuclear Norm Minimisation (Convex Baseline) — `admm_baseline.py`
-Solves `min ||H||_* s.t. P_Omega(x) = y, H = Hankel(x)` by ADMM. This is the same convex
-program as EMaC (Chen and Chi, 2014); `anm_emac_baselines.py` re-exports this solver as
-`emac_recovery` for use in the primary reproduction, where it is compared against ANM,
-FIHT, and PGD as one of the paper's four original baselines.
+Create and activate a virtual environment, then install the numerical
+dependencies:
 
-### 3. Fast Iterative Hard Thresholding (FIHT) — `fiht_baseline.py`
-Alternates a gradient step on the data-fidelity term with hard thresholding onto the
-rank-`r` Hankel manifold.
+```bash
+python -m venv .venv
+```
 
-### 4. Atomic Norm Minimisation (ANM) — `anm_emac_baselines.py`
-Solves the SDP-equivalent dual/primal Toeplitz moment problem via ADMM (no external SDP
-solver required). Used only in the primary phase transition reproduction, matching the
-four-algorithm comparison of the original paper.
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install numpy scipy matplotlib
+```
+
+Linux or macOS:
+
+```bash
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install numpy scipy matplotlib
+```
 
 ---
 
-## Experiments
+## Quick validation
 
-### Primary reproduction (`run_reproduction_experiment.py`)
+Compile all Python modules:
 
-Reproduces Cai-Wang-Wei (2018), Section 3.1, under the paper's exact protocol:
+```bash
+python -m compileall -q .
+```
 
-| Parameter | Value |
+Inspect the available command-line options:
+
+```bash
+python experiment_a_reproduction.py --help
+python experiment_b_shgd_extension.py --help
+python figures.py --help
+```
+
+A small smoke test should use a separate output directory so that it cannot be
+confused with the full experiment:
+
+```bash
+python experiment_a_reproduction.py \
+    --regime unseparated \
+    --p-grid 0.30 0.50 \
+    --n-trials 2 \
+    --r-max 2 \
+    --out-dir smoke_results
+
+python experiment_b_shgd_extension.py \
+    --regime unseparated \
+    --r-values 3 7 \
+    --p-grid 0.30 0.50 \
+    --n-trials 2 \
+    --out-dir smoke_results
+```
+
+These smoke-test files are not suitable for generating the complete thesis
+figures.
+
+---
+
+## Running Experiment A
+
+`experiment_a_reproduction.py` performs the Cai--Wang--Wei Figure 1-style
+phase-transition reproduction.
+
+### Default protocol
+
+| Parameter | Default |
+|---|---:|
+| Signal length | `n = 127` |
+| Hankel dimensions | `64 x 64` |
+| Nominal sampling grid | `p = 0.10, 0.15, ..., 0.95` |
+| Sampling rule | without replacement |
+| Samples per cell | `m = round(p n)` |
+| Trials per `(r,p)` cell | `50` |
+| Rank schedule | starts at `r=1`, step size `1` |
+| Structural maximum rank | `64` |
+| Stopping patience | two consecutive all-zero rank rows for every algorithm |
+| Frequency regimes | unseparated and separated |
+| Separated minimum distance | `1.5/n`, including wraparound |
+| Algorithms | PGD, FIHT, ANM, ADMM |
+| Success criterion | relative error `<= 1e-3` |
+
+Run the two regimes separately:
+
+```bash
+python experiment_a_reproduction.py \
+    --regime unseparated \
+    --time-budget 240
+
+python experiment_a_reproduction.py \
+    --regime separated \
+    --time-budget 240
+```
+
+The time budget is measured in seconds. Re-run the **same command** until the
+program reports that the regime is complete. The checkpoint records the exact
+protocol, rank schedule, seed, solver parameters, and completed cells; changing
+these settings while resuming an existing output file is rejected to prevent
+silent corruption.
+
+To run without a call-level time limit, omit `--time-budget`:
+
+```bash
+python experiment_a_reproduction.py --regime unseparated
+python experiment_a_reproduction.py --regime separated
+```
+
+Useful customisations include:
+
+```bash
+python experiment_a_reproduction.py \
+    --regime unseparated \
+    --algorithms PGD FIHT \
+    --n-trials 10 \
+    --r-max 12 \
+    --out-dir custom_results
+```
+
+Use a new output directory whenever the protocol is changed.
+
+### Experiment A outputs
+
+During execution:
+
+```text
+results/experiment_a_unseparated.json
+results/experiment_a_unseparated_trials/
+results/experiment_a_separated.json
+results/experiment_a_separated_trials/
+```
+
+After a regime completes, its per-cell files are merged into:
+
+```text
+results/experiment_a_unseparated_trials.jsonl
+results/experiment_a_separated_trials.jsonl
+```
+
+The checkpoint JSON contains aggregate cell statistics and the extracted
+80%-success rank boundary. The JSONL files retain individual paired trial
+records for later auditing and statistical analysis.
+
+---
+
+## Running Experiment B
+
+`experiment_b_shgd_extension.py` compares asymmetric PGD, symmetric-factor
+SHGD, and FIHT on a fixed grid.
+
+### Default protocol
+
+| Parameter | Default |
+|---|---:|
+| Signal length | `n = 127` |
+| Rank grid | `r in {1, 3, 5, 7, 9, 11}` |
+| Nominal sampling grid | `p = 0.10, 0.15, ..., 0.95` |
+| Trials per `(r,p)` cell | `30` |
+| Frequency regimes | unseparated and separated |
+| Algorithms | PGD, SHGD, FIHT |
+| Success criterion | relative error `<= 1e-3` |
+
+Run both regimes:
+
+```bash
+python experiment_b_shgd_extension.py \
+    --regime unseparated \
+    --time-budget 240
+
+python experiment_b_shgd_extension.py \
+    --regime separated \
+    --time-budget 240
+```
+
+Re-run each command until the corresponding regime is complete.
+
+A custom fixed grid can be supplied explicitly:
+
+```bash
+python experiment_b_shgd_extension.py \
+    --regime separated \
+    --r-values 1 3 5 7 9 11 \
+    --p-grid 0.20 0.30 0.40 0.50 0.60 \
+    --n-trials 20 \
+    --out-dir custom_results
+```
+
+### Experiment B outputs
+
+During execution:
+
+```text
+results/experiment_b_unseparated.json
+results/experiment_b_unseparated_trials/
+results/experiment_b_separated.json
+results/experiment_b_separated_trials/
+```
+
+After completion:
+
+```text
+results/experiment_b_unseparated_trials.jsonl
+results/experiment_b_separated_trials.jsonl
+```
+
+---
+
+## Generating the thesis figures
+
+After all four merged JSONL files exist, generate Figures 5.1--5.5 in one run:
+
+```bash
+python figures.py --results-dir results --output-dir images
+```
+
+The default formats are PNG and PDF at 300 dpi. SVG is also supported:
+
+```bash
+python figures.py \
+    --results-dir results \
+    --output-dir images \
+    --formats png pdf svg \
+    --dpi 300
+```
+
+Expected inputs:
+
+```text
+results/experiment_a_unseparated_trials.jsonl
+results/experiment_a_separated_trials.jsonl
+results/experiment_b_unseparated_trials.jsonl
+results/experiment_b_separated_trials.jsonl
+```
+
+Generated figures:
+
+| Thesis figure | Output stem | Content |
+|---|---|---|
+| Figure 5.1 | `figure_5_1_experiment_a_separated` | Experiment A separated-frequency heatmaps |
+| Figure 5.2 | `figure_5_2_experiment_a_unseparated` | Experiment A unseparated-frequency heatmaps |
+| Figure 5.3 | `figure_5_3_experiment_a_80%_boundary` | 80%-success rank boundaries |
+| Figure 5.4 | `figure_5_4_experiment_b_success_curves` | PGD, SHGD, and FIHT success curves at `r=3,7,9,11` |
+| Figure 5.5 | `figure_5_5_experiment_b_computational_cost` | Successful-trial iterations at `r=9` and wall-clock time at `r=11` |
+
+Figure 5.4 requires Experiment B data for ranks `3`, `7`, `9`, and `11`.
+Figure 5.5 requires separated-frequency data for ranks `9` and `11`. The
+default Experiment B grid includes all required ranks.
+
+---
+
+## Repository Structure
+
+| Path | Purpose |
 |---|---|
-| Signal length | `n=127` |
-| Sampling ratio grid | 18 equispaced points, `p in {0.10, 0.15, ..., 0.95}` |
-| Trials per configuration | 50 |
-| Rank sweep | `r = 1, 2, ...` incremented until two consecutive ranks fail entirely |
-| Frequency regimes | Unseparated, and separated (minimum wraparound separation `1.5/n`) |
-| Algorithms | ANM, EMaC, FIHT, PGD |
+| `utils.py` | Signal generation, Hankel operators, deterministic seed construction, and shared numerical utilities |
+| `pgd_algorithm.py` | Projected gradient descent implementation for factorised low-rank Hankel recovery |
+| `fiht_baseline.py` | Fast iterative hard thresholding baseline |
+| `admm_baseline.py` | Hankel nuclear-norm recovery using ADMM |
+| `anm_emac_baselines.py` | Atomic norm minimisation and EMaC-compatible recovery interfaces |
+| `shgd_algorithm.py` | Symmetric Hankel gradient descent implementation |
+| `comparison_engine.py` | Shared paired-trial execution, algorithm registry, statistics, checkpointing, and result storage |
+| `experiment_a_reproduction.py` | Experiment A: reproduction and extended comparison of PGD, FIHT, ANM, and EMaC/ADMM |
+| `experiment_b_shgd_extension.py` | Experiment B: comparison of PGD, SHGD, and FIHT |
+| `figures.py` | Generates the Chapter 5 figures from completed experiment records |
+| `results/` | Version-controlled JSON and JSONL outputs from the completed numerical experiments |
 
-### Extended study (`run_all_experiments.py`)
+The repository contains only the source code and numerical records required for the thesis experiments. The earlier demonstration notebook has been removed because it is not part of the experiment pipeline and was not used to generate the reported results.
+---
 
-An independent empirical study, run at the same `n=127`, with a coarser grid and fewer
-trials, comparing a three-algorithm subset (ADMM, PGD, FIHT):
+## Results and Reproducibility
 
-| # | Experiment | Description |
-|---|-----------|-------------|
-| 1 | Phase Transition (ADMM, undamped) | Success rate vs. rank `r` and sampling ratio `m/n`, `r=1..10` |
-| 2 | Phase Transition (PGD, undamped) | Same for PGD, `r=1..5` -- shows the non-monotone high-rank behaviour discussed below |
-| 3 | Phase Transition (ADMM, damped) | Tests robustness to damping factors, `r=1..6` |
-| 4 | Convergence Analysis | Relative error vs. iteration count, `n=127, r=5, m/n=0.4`, 5 trials |
-| 5 | Algorithm Comparison | ADMM vs. PGD vs. FIHT on identical problem instances, `r=1..6` |
-| 6 | Noise Robustness | Recovery error vs. SNR, `n=127, r=5, m/n=0.5`, 8 SNR levels, 20 trials each |
-| 7 | Computational Scaling | Runtime and iteration count vs. `n in {32,64,128,256}` |
+The completed numerical results are stored in the version-controlled `results/`
+directory. Including these files in the repository provides an audit trail between the
+experiment code, the numerical findings, and the figures and tables reported in the
+thesis.
+
+Depending on which experiment regimes have been completed, the directory may contain:
+
+```text
+results/
+├── experiment_a_unseparated.json
+├── experiment_a_unseparated_trials.jsonl
+├── experiment_a_separated.json
+├── experiment_a_separated_trials.jsonl
+├── experiment_b_unseparated.json
+├── experiment_b_unseparated_trials.jsonl
+├── experiment_b_separated.json
+└── experiment_b_separated_trials.jsonl
 
 ---
 
-## Usage
+## Implemented methods
 
-### Primary reproduction
-```bash
-python run_reproduction_experiment.py --quick                            # fast check
-python run_reproduction_experiment.py                                     # full protocol
-python run_reproduction_experiment.py --regimes unseparated                # one regime only
-python run_reproduction_experiment.py --algorithms ANM PGD                  # subset of algorithms
+### Projected Gradient Descent
+
+PGD factorises the lifted Hankel matrix asymmetrically as
+
+```text
+H(x) approximately equals Z_U Z_V^*,
 ```
 
-### Extended study
-```bash
-python run_all_experiments.py --quick                    # ~2 minutes
-python run_all_experiments.py                             # ~30-60 minutes, full protocol
-python run_all_experiments.py --output-dir my_results      # custom output directory
-python run_all_experiments.py --seed 123                    # set random seed
+and minimises a regularised non-convex objective in the factor matrices. The
+implementation uses:
+
+- normalised Hankel lifting;
+- one-step spectral initialisation;
+- an inflated leading-singular-value estimate;
+- row-wise projection onto the incoherence set;
+- the balancing regulariser;
+- a monotone backtracking line search;
+- stopping rules based on relative iterate and objective changes.
+
+The unknown ground truth is used only for post-run diagnostics and never for
+step acceptance or stopping.
+
+### Fast Iterative Hard Thresholding
+
+FIHT alternates a data-consistency update with rank-`r` truncation of the
+Hankel lift. SVD failures are handled without aborting the complete experiment,
+and the shared SVD utility falls back from the fast `gesdd` LAPACK driver to the
+more conservative `gesvd` driver when necessary.
+
+### Hankel nuclear-norm ADMM
+
+The convex baseline solves
+
+```text
+minimise ||H(x)||_* subject to x[Omega] = y_obs.
+```
+
+This is the Hankel nuclear-norm program associated with EMaC. The repository
+reports it as `ADMM` because it is solved by the custom implementation in
+`admm_baseline.py`, not by the original paper's CVX configuration.
+
+### Atomic Norm Minimisation
+
+ANM is implemented through an ADMM splitting of the positive-semidefinite
+Toeplitz moment formulation. It does not require `cvxpy` or another external
+semidefinite-programming package.
+
+### Symmetric Hankel Gradient Descent
+
+For odd `n`, the Hankel lift is square and complex symmetric. SHGD exploits the
+factorisation
+
+```text
+H(x) approximately equals Z Z^T,
+```
+
+using one factor matrix and no asymmetric balancing term. The initial factor is
+constructed from a Takagi factorisation, with deterministic seeding for the
+truncated sparse-SVD path.
+
+---
+
+## Reproducibility design
+
+The two experiment drivers share the same execution engine so that their
+protocols cannot silently drift apart.
+
+For every `(regime, r, p-index, trial)` tuple, the engine derives one integer
+seed. All algorithms in that cell therefore receive the same signal and the
+same sampling pattern. SHGD also receives a deterministic initialisation seed.
+
+Each checkpoint stores:
+
+- the base seed;
+- signal length and rank grid;
+- nominal and realised sampling ratios;
+- sampling convention and rounding rule;
+- success tolerance;
+- damping and separation settings;
+- NumPy and SciPy versions;
+- every numerical solver parameter;
+- completed cells and aggregate statistics.
+
+Trial records preserve the algorithm status, reconstruction error, runtime,
+iteration count, success indicator, and seed. Timing and iteration summaries
+are reported separately for successful trials because averages that combine
+successful runs with failed or maximum-iteration runs can be misleading.
+
+---
+
+## Reproduction scope and documented deviations
+
+Experiment A is a **reproduction attempt**, not a claim of bit-for-bit identity
+with the published MATLAB experiment. The following differences are explicit:
+
+1. ANM and Hankel nuclear-norm recovery are custom ADMM implementations rather
+   than the original CVX solver configuration.
+2. Algorithms are advanced on one shared rank schedule to keep all rows paired;
+   the original paper describes escalation at a more method-specific level.
+3. PGD and FIHT use stopping tests evaluated on the projected candidate iterate.
+4. The implementation uses dense NumPy/SciPy linear algebra and does not claim
+   the FFT/PROPACK runtime complexity of the original implementation.
+5. Sampling uses `m = round(p n)` distinct indices without replacement, and the
+   realised ratio `m/n` is stored alongside the nominal grid value.
+
+Accordingly, qualitative phase-transition structure is the primary comparison.
+Absolute boundaries and runtimes should not be presented as exact replications
+of the original software environment.
+
+---
+
+## Important implementation corrections
+
+Earlier development versions contained errors that made several methods fail
+systematically. The current implementation includes the following corrections:
+
+1. **Hankel adjoint:** the true adjoint sums along anti-diagonals; averaging is
+   retained only as a separately identified pseudo-inverse operation where the
+   ADMM least-squares update requires it.
+2. **Signal reconstruction:** factorised Hankel estimates are mapped back with
+   the required `D^-2 H*` reconstruction.
+3. **Coordinate consistency:** the data-fidelity target uses the preconditioned
+   observed coordinates `D[Omega] * y_obs`.
+4. **Incoherence threshold:** the projection threshold is based on the inflated
+   singular-value estimate used by the paper's initialisation analysis.
+5. **Balancing gradient:** the derivative of the PGD balancing regulariser is
+   included in both factor gradients.
+
+The PGD Wirtinger gradient and the corrected operators were checked numerically
+on small test problems during development before the full grids were run.
+
+---
+
+## Mathematical model
+
+The signal is a sum of `r` complex exponentials:
+
+```text
+x[t] = sum_{k=1}^r d_k exp((2 pi i f_k - tau_k)t),
+       t = 0, ..., n-1.
+```
+
+Its Hankel lift is defined by
+
+```text
+H(x)[i,j] = x[i+j],
+```
+
+with dimensions satisfying `n1 + n2 = n + 1`. For `n=127`,
+`n1=n2=64`. Under distinct non-zero spectral components, the Hankel rank is the
+model order `r`.
+
+The normalised lifting operator is
+
+```text
+G = H D^-1,
+```
+
+where `D^2` contains the anti-diagonal multiplicities. This gives the isometry
+property
+
+```text
+G* G = I.
 ```
 
 ---
 
-## Key Findings
+## Result-management policy
 
-These are the headline empirical findings from the corrected implementation, reported in
-full in the thesis.
+The `results/` directory is excluded from Git because full trial logs and
+checkpoints can be large and are generated data rather than source code. For a
+reproducible thesis archive, store completed results separately, for example as:
 
-1. **The primary reproduction confirms the paper's qualitative ordering.** At
-   low-to-moderate rank, ANM is the most sample-efficient of the four algorithms, PGD is
-   second, and EMaC and FIHT trail with comparable thresholds -- matching Figure 1 of
-   Cai-Wang-Wei (2018). ANM's advantage grows substantially under frequency separation,
-   while EMaC's threshold is essentially unaffected by separation, also matching the paper.
+- a tagged GitLab release asset;
+- an institutional research-data deposit;
+- a DOI-backed archive;
+- a compressed snapshot accompanied by the exact commit hash.
 
-2. **PGD shows a reproducible, non-monotone success probability at high rank under
-   unseparated frequencies.** Rather than approaching 1.0 as the sampling ratio increases,
-   PGD's success probability plateaus around 0.5-0.8 for `r >= 8` and never reaches the
-   paper's 80% threshold for `r >= 10` anywhere on the tested grid. This plateau disappears
-   almost entirely under frequency separation, pointing to incoherence (rather than sample
-   count) as the binding constraint, and is attributed to the fixed step size used
-   throughout being miscalibrated for a subset of trials. This finding is corroborated
-   independently by the extended study's own phase transition experiment (a completely
-   separate simulation, same `n`, different trial count and seed sequence), and reappears
-   in the convergence and noise robustness experiments as bimodal, outlier-driven behaviour.
-
-3. **PGD has the most favourable computational scaling.** Empirically `O(n^1.0)` versus
-   `O(n^2.4)` for ADMM, consistent with the paper's `O(rn log n)` per-iteration complexity
-   claim via FFT-based Hankel operations.
-
-4. **The outlier-driven instability is not confined to non-convex methods.** At high SNR
-   (>=30 dB), even the convex ADMM baseline shows a mean RMSE substantially inflated above
-   its median, driven by a small subset of trials that fail to converge within the fixed
-   iteration budget despite an otherwise easy problem instance. PGD and FIHT show the same
-   pattern more often and at somewhat lower SNR. This suggests the instability is better
-   understood as a matter of degree, tied partly to a fixed iteration budget, than as a
-   strict convex/non-convex distinction.
+The generated `images/` directory is not ignored by the current `.gitignore`, so
+final thesis figures may be committed deliberately after review.
 
 ---
 
-## Known Issues, Fixed
+## Citation
 
-An earlier version of this codebase produced uniformly zero recovery success across every
-tested configuration for PGD, ADMM, and FIHT. Debugging traced this to the following root
-causes, all now corrected:
-
-1. **Wrong Hankel adjoint.** The adjoint operator `H*` was implemented as an average over
-   each anti-diagonal (the Moore-Penrose pseudo-inverse `H_dagger`) rather than the true
-   adjoint (a sum), breaking the identity `H*H = D^2` that the gradient and reconstruction
-   formulas depend on. `H*` (summing) is used in `pgd_algorithm.py` and
-   `fiht_baseline.py`; the averaging operator `H_dagger` is a separate, correctly-named
-   helper used only in the ADMM `x`-update, where it is the correct least-squares operator
-   for that sub-problem.
-
-2. **Wrong signal reconstruction formula.** The signal was recovered as
-   `D^-1 H*(Z_U Z_V*)`; the correct formula is `x = D^-2 H*(Z_U Z_V*)`.
-
-3. **Coordinate-system mismatch in the data fidelity term.** The objective compared
-   `G*(Z_U Z_V*)` against the raw observations `y_obs` instead of the correctly
-   preconditioned target `D[Omega] * y_obs`.
-
-4. **Undersized incoherence projection threshold.** The threshold `tau` was computed from
-   the raw (uninflated) initial singular value estimate, which underestimates the true
-   `sigma_1` by a factor of roughly 3, so the true solution lay outside the feasible set.
-   Fixed by applying the paper's inflation formula `sigma = sigma_1(L^0) / (1 - eps_0)`,
-   `eps_0 = 1/11`.
-
-5. **Missing balancing regulariser gradient.** The term `lambda * g(Z)` was included in the
-   objective but never differentiated; its gradient contribution `lambda * Z_U * B` /
-   `-lambda * Z_V * B` (with `B = Z_U*Z_U - Z_V*Z_V`) was added.
-
-All five corrections were verified by finite-difference checks on the Wirtinger gradient
-(confirming the expected factor-of-2 relationship between the analytic gradient and the
-real directional derivative) and by confirming machine-precision recovery
-(`rel_error < 1e-6`) on small test problems before scaling up to the full experiment grid.
-
----
-
-## Mathematical Formulation
-
-### Signal Model
-A spectrally sparse signal with `r` components:
-```
-x(t) = sum_{k=1}^r d_k * exp((2*pi*i*f_k - tau_k)*t),   t = 0, ..., n-1
-```
-
-### Hankel Structure
-The Hankel matrix `H(x)` has entries:
-```
-[H(x)]_{i,j} = x_{i+j},   i in [n1], j in [n2],   n1 + n2 = n + 1
-```
-For `n=127`: `n1 = n2 = 64` (exactly square, matching the paper).
-
-### Key Property
-For a spectrally sparse signal with `r` distinct, non-zero-amplitude components:
-`rank(H(x)) = r`.
-
-### Normalised Lifting Operator
-`G = H D^-1`, where `D` is the diagonal preconditioner with `[D^2]_a` equal to the number of
-entries on the `a`-th anti-diagonal of `H`. This satisfies `G*G = I`.
-
-### Problems Solved
-- **Non-convex, factorised:** `min F(Z) = f(Z) + lambda * g(Z)` over `Z = [Z_U; Z_V]`, where
-  `Z_U Z_V* ~ H(x)` (PGD).
-- **Non-convex, thresholding:** gradient step + hard threshold onto rank-`r` Hankel
-  manifold (FIHT).
-- **Convex relaxation:** `min ||H(x)||_* s.t. x[Omega] = y` (ADMM / EMaC).
-- **Convex, atomic norm:** SDP-equivalent dual Toeplitz moment problem (ANM).
-
----
-
-## Dependencies
-
-- Python 3.8+
-- NumPy
-- SciPy
-- Matplotlib
-
-No external SDP solver (e.g. `cvxpy`) is required; ANM is solved via ADMM on the dual
-Toeplitz moment problem using only NumPy/SciPy.
-
----
-
-## Notes for Thesis Writing
-
-- The primary reproduction (`run_reproduction_experiment.py`) is the only experiment in
-  this thesis whose numbers are directly comparable to a specific published figure
-  (Figure 1 of Cai-Wang-Wei 2018). The extended study is an independent empirical
-  investigation motivated by, but not a literal reproduction of, any specific table in the
-  paper -- see the Comparability Summary table in the thesis (Chapter 4) for the precise
-  scope of each experiment.
-- The model order sensitivity experiment of the paper's Section 3.4 is not reproduced in
-  this codebase; see the thesis conclusion for the reasons and for this as a suggested
-  direction for future work.
-- All JSON result files record their own `n`, trial count, and grid parameters, so any
-  regenerated figure or table can be traced back to the exact configuration that produced
-  it.
+When using this repository, cite the thesis and the principal source papers
+listed above. A formal `CITATION.cff` file can be added once the final thesis
+bibliographic details and repository release tag are fixed.

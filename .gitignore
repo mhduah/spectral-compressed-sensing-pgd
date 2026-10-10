@@ -1,16 +1,36 @@
+# Python cache and compiled files
 __pycache__/
 *.py[cod]
+
+# Virtual environment
 .venv/
 venv/
-.env
+
+# Jupyter checkpoints
 .ipynb_checkpoints/
-.pytest_cache/
+
+# VS Code
 .vscode/
-.idea/
+
+# Logs
+*.log
+
+# Track final experiment records but ignore temporary result artefacts
+results/*
+!results/*.json
+!results/*.jsonl
+
+# Generated figures
+images/
+
+# Archives
+*.zip
+
+# Temporary files
+*.tmp
+*.lock
+
+# Editor and operating-system files
+.vscode/
 .DS_Store
 Thumbs.db
-
-# Generated experiment outputs
-results/
-images/
-*.log

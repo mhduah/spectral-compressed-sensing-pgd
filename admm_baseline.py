@@ -64,7 +64,9 @@ def nuclear_norm_proximal(H, tau):
 # ============================================================
 
 def admm_nuclear_norm(y_obs, Omega, r, n, n1=None,
-                      max_iter=500, tol=1e-6, rho=2.0,
+                      max_iter=500, rho=2.0,
+                      relative_iterate_tol=1e-6, primal_residual_tol=1e-6,
+                      min_iter=10, patience=5,
                       x_true=None, verbose=False, return_history=False):
     """
     ADMM for Hankel nuclear norm minimisation.
@@ -92,13 +94,26 @@ def admm_nuclear_norm(y_obs, Omega, r, n, n1=None,
     r       : int             target rank (informational; not used in convex solver)
     n       : int             signal dimension
     n1      : int, optional   Hankel row count
-    max_iter, tol, rho        standard ADMM parameters
-    x_true  : ndarray         ground truth for monitoring
+    max_iter, rho             standard ADMM parameters
+    relative_iterate_tol      stop when ||x^{k+1}-x^k|| / ||x^k|| <= this
+    primal_residual_tol       stop when ||H^{k+1}-H(x^{k+1})||_F / ||H^{k+1}||_F <= this
+    min_iter, patience        both criteria must hold for `patience`
+                              consecutive iterations, not before
+                              iteration `min_iter`, before accepting
+                              convergence. This solver's convergence
+                              trajectory was verified to be smooth (no
+                              transient false-plateau, unlike ANM below),
+                              so small defaults suffice here; kept for
+                              interface consistency and defensive safety.
+    x_true  : ndarray         ground truth for diagnostics ONLY -- it is
+                              never used to decide when to stop or which
+                              iterate to return
     verbose, return_history   output controls
 
     Returns
     -------
-    result : dict
+    result : dict with keys 'x', 'H', 'converged', 'status', 'iterations',
+             'time', and 'rel_error' if x_true is given.
     """
     t0 = time.time()
 
@@ -113,10 +128,15 @@ def admm_nuclear_norm(y_obs, Omega, r, n, n1=None,
     Lambda = np.zeros((n1, n2), dtype=np.complex128)
     tau = 1.0 / rho                     # nuclear norm weight
 
-    history  = {'rel_errors': [], 'obj_values': []}
-    best_err = np.inf
-    best_x   = x.copy()
+    history  = {
+        'relative_iterate': [],
+        'primal_residual': [],
+        'relative_error': [relative_error(x, x_true)] if x_true is not None else [],
+    }
     converged = False
+    status = "max_iter"
+    iteration = 0
+    consecutive_ok = 0
 
     for k in range(max_iter):
 
@@ -130,47 +150,59 @@ def admm_nuclear_norm(y_obs, Omega, r, n, n1=None,
         H_target = build_hankel(x_new, n1) - Lambda / rho
         H_new = nuclear_norm_proximal(H_target, tau)
 
+        # ---- Overflow guard (before using H_new/x_new further) ----
+        if not np.all(np.isfinite(x_new)) or not np.all(np.isfinite(H_new)):
+            status = "nonfinite_iterate"
+            if verbose:
+                print(f"  ADMM: overflow at iteration {k}, stopping")
+            break
+
         # ---- Lambda-update ----
-        Lambda = Lambda + rho * (H_new - build_hankel(x_new, n1))
+        H_of_x_new = build_hankel(x_new, n1)
+        Lambda = Lambda + rho * (H_new - H_of_x_new)
+
+        rel_iterate = float(
+            np.linalg.norm(x_new - x)
+            / max(np.linalg.norm(x), np.finfo(float).eps)
+        )
+        primal_res = float(
+            np.linalg.norm(H_new - H_of_x_new, 'fro')
+            / max(np.linalg.norm(H_new, 'fro'), np.finfo(float).eps)
+        )
 
         x = x_new
         H = H_new
+        iteration = k + 1
 
-        # ---- Overflow guard ----
-        if not np.all(np.isfinite(x)) or not np.all(np.isfinite(H)):
+        if return_history:
+            history['relative_iterate'].append(rel_iterate)
+            history['primal_residual'].append(primal_res)
+            if x_true is not None:
+                history['relative_error'].append(relative_error(x, x_true))
+
+        if verbose and (k % 50 == 0 or k < 5):
+            msg = f"  ADMM k={k:4d}: rel_step={rel_iterate:.2e} primal_res={primal_res:.2e}"
+            if x_true is not None:
+                msg += f" rel_err={relative_error(x, x_true):.2e}"
+            print(msg)
+
+        if rel_iterate <= relative_iterate_tol and primal_res <= primal_residual_tol:
+            consecutive_ok += 1
+        else:
+            consecutive_ok = 0
+
+        if iteration >= min_iter and consecutive_ok >= patience:
+            converged = True
+            status = "relative_iterate_and_primal_residual"
             if verbose:
-                print(f"  ADMM: overflow at iteration {k}, returning best so far")
+                print(f"  ADMM converged at k={k}")
             break
-
-        # ---- Monitoring ----
-        if x_true is not None:
-            err = relative_error(x, x_true)
-            if err < best_err:
-                best_err = err
-                best_x   = x.copy()
-            if return_history:
-                history['rel_errors'].append(err)
-            if verbose and k % 50 == 0:
-                _, s, _ = svd(H, full_matrices=False)
-                print(f"  ADMM k={k:4d}: err={err:.2e}, "
-                      f"nuc={np.sum(s):.3f}, rank={np.sum(s > 1e-6 * s[0])}")
-            if err < tol:
-                converged = True
-                if verbose:
-                    print(f"  ADMM converged at k={k}")
-                break
-        elif return_history:
-            _, s, _ = svd(H, full_matrices=False)
-            history['obj_values'].append(float(np.sum(s)))
-
-    # Return best estimate
-    if x_true is not None and best_x is not None:
-        x = best_x
 
     result = {
         'x': x, 'H': H,
         'converged': converged,
-        'iterations': k + 1,
+        'status': status,
+        'iterations': iteration,
         'time': time.time() - t0,
         'rho': rho,
     }

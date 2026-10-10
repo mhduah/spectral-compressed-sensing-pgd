@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: >
+  If you use this repository, please cite the associated MSc thesis
+  and the software repository.
+
+title: "Spectral Compressed Sensing via Projected
+  Gradient Descent — Numerical Simulation and Analysis"
+
+type: software
+
+authors:
+  - family-names: "Duah"
+    given-names: "Michael Hubert"
+
+repository-code: "https://gitlab.gwdg.de/michaelhubert.duah/spectral_cs_thesis_experiments"
+
+abstract: >
+  Numerical implementation and experimental framework accompanying the
+  MSc Mathematics thesis "Spectral Compressed Sensing via Projected
+  Gradient Descent — Numerical Simulation and Analysis". The repository
+  contains implementations of projected gradient descent (PGD), fast
+  iterative hard thresholding (FIHT), atomic norm minimisation (ANM),
+  EMaC/ADMM-based Hankel nuclear-norm recovery, and symmetric Hankel
+  gradient descent (SHGD), together with experiment drivers, numerical
+  result records, and scripts for generating the thesis figures.
+
+keywords:
+  - spectral compressed sensing
+  - projected gradient descent
+  - low-rank Hankel matrix recovery
+  - Hankel matrix completion
+  - atomic norm minimisation
+  - FIHT
+  - SHGD
+  - numerical simulation
+  - compressed sensing

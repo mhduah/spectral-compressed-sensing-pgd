@@ -22,6 +22,20 @@ from numpy.random import default_rng
 # 1. Signal Generation
 # ============================================================
 
+def _min_wraparound_separation(freqs):
+    """
+    Minimum gap between consecutive sorted frequencies on the unit circle,
+    including the wraparound gap between the largest and the smallest
+    (i.e. treating the frequencies as points on a circle of circumference
+    1, not as points on a line).
+    """
+    freqs = np.sort(np.asarray(freqs))
+    if len(freqs) < 2:
+        return 1.0
+    gaps = np.diff(freqs)
+    wrap_gap = 1.0 - freqs[-1] + freqs[0]
+    return float(min(np.min(gaps), wrap_gap))
+
 def generate_signal(n, r, damped=False, damping_range=(0.01, 0.1),
                     freq_sep=1.5, rng=None):
     """
@@ -64,9 +78,36 @@ def generate_signal(n, r, damped=False, damping_range=(0.01, 0.1),
         if np.all(all_diffs >= min_sep):
             break
     else:
-        # Fallback: evenly spaced frequencies with small random perturbation
-        freqs = (np.arange(r) / r + rng.random(r) * min_sep * 0.5) % 1.0
-        freqs = np.sort(freqs)
+        # Fallback: evenly spaced frequencies with a small random
+        # perturbation. Even spacing alone guarantees a gap of 1/r; the
+        # perturbation amplitude is explicitly capped so that it cannot
+        # itself violate the minimum separation requirement (the previous
+        # version added up to min_sep/2 of *independent* jitter per
+        # frequency, so two adjacent frequencies could jitter toward each
+        # other by up to min_sep and undercut the guarantee).
+        base = np.arange(r) / r
+        if r > 0 and (1.0 / r) > min_sep:
+            max_jitter = min(min_sep, (1.0 / r) - min_sep) * 0.25
+        else:
+            max_jitter = 0.0  # r too large relative to freq_sep/n for any
+                              # jitter to be safe; fall back to exact even
+                              # spacing (still the best achievable spacing).
+        jitter = rng.uniform(-max_jitter, max_jitter, r) if max_jitter > 0 else 0.0
+        freqs = np.sort((base + jitter) % 1.0)
+
+    # Defensive check: the freq_sep condition must hold regardless of which
+    # branch produced `freqs`. If this ever fires it means r is too large
+    # for freq_sep/n to be satisfiable at all (r > n/freq_sep, roughly),
+    # which should be treated as a configuration error rather than
+    # silently generating a signal that violates the requested separation.
+    achieved_sep = _min_wraparound_separation(freqs)
+    if achieved_sep < min_sep - 1e-9:
+        raise RuntimeError(
+            f"Could not generate {r} frequencies with minimum separation "
+            f"{min_sep:.6f} (achieved {achieved_sep:.6f}). This typically "
+            f"means r={r} is too large relative to freq_sep/n={min_sep:.6f}; "
+            "reduce r, reduce freq_sep, or increase n."
+        )
 
     if damped:
         damping = rng.uniform(damping_range[0], damping_range[1], r)
@@ -360,6 +401,38 @@ def hard_threshold_svd(H, r):
     """Rank-r truncated SVD of H."""
     U, s, Vh = svd(H, full_matrices=False)
     return (U[:, :r] * s[:r]) @ Vh[:r, :]
+
+
+def truncated_svd(M, r):
+    """
+    Rank-r truncated SVD with a robust LAPACK-driver fallback.
+    """
+    M = np.asarray(M)
+
+    if not np.all(np.isfinite(M)):
+        raise FloatingPointError(
+            "truncated_svd received a matrix containing NaN or Inf."
+        )
+
+    try:
+        # Fast divide-and-conquer driver.
+        U, s, Vh = svd(
+            M,
+            full_matrices=False,
+            check_finite=False,
+            lapack_driver="gesdd",
+        )
+    except np.linalg.LinAlgError:
+        # More conservative QR-based driver.
+        U, s, Vh = svd(
+            M,
+            full_matrices=False,
+            check_finite=False,
+            lapack_driver="gesvd",
+        )
+
+    r_eff = min(r, len(s))
+    return U[:, :r_eff], s[:r_eff], Vh[:r_eff, :]
 
 
 def hankel_relative_error(x_est, x_true, n1=None):
